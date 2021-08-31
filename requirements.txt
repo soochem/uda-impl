@@ -1,0 +1,5 @@
+progressbar>=2.5
+torch==1.6.0+cu101
+-f https://download.pytorch.org/whl/torch_stable.html
+sentencepiece>=0.1.94
+numpy>=1.18.5
