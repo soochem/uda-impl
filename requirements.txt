@@ -1,5 +1,18 @@
 progressbar>=2.5
+absl-py>=0.13.0
 torch==1.6.0+cu101
 -f https://download.pytorch.org/whl/torch_stable.html
 sentencepiece>=0.1.94
 numpy>=1.18.5
+# backtranslation
+fastBPE
+regex
+requests
+sacremoses
+subword_nmt
+hydra-core
+omegaconf
+bitarray
+# train
+seqeval
+transformers==4.3.0

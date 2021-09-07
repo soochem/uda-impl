@@ -15,9 +15,24 @@
 #!/bin/bash
 
 # **** download pretrained models ****
-wget storage.googleapis.com/bert_models/2018_10_18/uncased_L-12_H-768_A-12.zip 
-unzip uncased_L-12_H-768_A-12.zip && rm uncased_L-12_H-768_A-12.zip
-mv uncased_L-12_H-768_A-12 BERT_Base_Uncased
+mkdir pretrained_models
 
-# **** unzip data ****
+# download bert base
+cd pretrained_models
+
+wget https://storage.googleapis.com/bert_models/2018_10_18/uncased_L-12_H-768_A-12.zip
+unzip uncased_L-12_H-768_A-12.zip && rm uncased_L-12_H-768_A-12.zip
+mv uncased_L-12_H-768_A-12 bert_base
+cd ..
+
+# **** download & unzip data ****
+wget https://raw.githubusercontent.com/SanghunYun/UDA_pytorch/master/data.zip
 unzip data.zip && rm data.zip
+
+# # **** download IMDB data and convert it to csv files ****
+# mkdir data/IMDB_raw
+# cd data/IMDB_raw
+# wget https://ai.stanford.edu/~amaas/data/sentiment/aclImdb_v1.tar.gz
+# tar xzvf aclImdb_v1.tar.gz && rm aclImdb_v1.tar.gz
+# cd ../..
+# python utils/imdb_format.py --raw_data_dir=data/IMDB_raw/aclImdb --train_id_path=data/IMDB_raw/train_id_list.txt --output_dir=data/IMDB_raw/csv
