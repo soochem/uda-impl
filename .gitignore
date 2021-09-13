@@ -3,6 +3,9 @@
 venv/
 */__pycache__/
 
+# package
+fairseq/
+
 # data
 data/
 model/
