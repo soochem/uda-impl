@@ -6,10 +6,12 @@ venv/
 # package
 fairseq/
 
-# data
+# data & model
 data/
 model/
 pretrained_models/
+test/
+output/
 
 # logs
 logs/

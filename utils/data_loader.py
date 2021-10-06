@@ -28,7 +28,7 @@ class IMDBDataset(Dataset):
         mode: Split = Split.train,
         is_augmented: bool = True,
         is_raw_file: bool = False,
-        max_count: int = 10000,
+        max_count: int = 100000,
     ):
         """
         data_dir : name of directory
@@ -69,7 +69,7 @@ class IMDBDataset(Dataset):
         orig  = [tensor[index] for tensor in self.orig] if self.orig is not None else torch.tensor([])
         aug   = [tensor[index] for tensor in self.aug] if self.aug is not None else torch.tensor([])
         label = self.label[index] if self.label is not None else torch.tensor([])
-        # pdb.set_trace()
+        
         return orig, aug, label
 
     def read_from_file(self, file_path, dtype=''):

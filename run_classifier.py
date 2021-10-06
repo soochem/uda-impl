@@ -34,7 +34,9 @@ from src.trainer import Trainer
 
 import pdb
 
+
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 
 class Split(Enum):
@@ -63,14 +65,28 @@ class DataTrainingArguments(TrainingArguments):
             "than this will be truncated, sequences shorter will be padded."
         },
     )
+    # training
+    num_train_steps: int = field(
+        default=10000,
+        metadata={"help": "Total number of steps for training"}
+    )
+    # for training loss
     loss_weight: float = field(
         default=1.0,
         metadata={"help": "Weighting factor to balance supervised cross entropy loss and unsupervised consistency training loss"}
     )
+    tsa_mode: str = field(
+        default=None,
+        metadata={"help": "Threshold scheduling type for training loss"}
+    )
+    softmax_temp: float = field(
+        default=1.0,
+        metadata={"help": "Sharpening temperature for logits on augmented data"}
+    )
 
 
 if __name__ == "__main__":
-    
+
     parser = HfArgumentParser(DataTrainingArguments)
     if len(sys.argv) == 2 and sys.argv[1].endswith(".json"):
         # if args are written as json file, load args from json
@@ -80,11 +96,12 @@ if __name__ == "__main__":
 
     training_args = training_args[0]
 
-    num_labels = 1  # binary classfication -> MSE loss
+    # num_labels = 1  # binary classfication -> MSE loss
+    # num_labels = 2  # CE loss (<- AutoConfig)
 
     config = AutoConfig.from_pretrained(
         training_args.model_name_or_path,
-        num_labels=num_labels,
+        # num_labels=num_labels,
     )
 
     tokenizer = AutoTokenizer.from_pretrained(
@@ -97,11 +114,10 @@ if __name__ == "__main__":
         config=config,
     )
 
-    
     # load data
-    # train -> unsup (6 cols) / sup (4 cols)
+    # train -> sup (4 cols) / unsup (6 cols)
     # train -> sup 20 + unsup 60k
-    MAX_COUNT = 20  # for test
+    MAX_COUNT = 500  # for test
     
     train_sup_dataset = (
         IMDBDataset(
@@ -110,7 +126,6 @@ if __name__ == "__main__":
             # max_seq_length=data_args.max_seq_length,
             mode=Split.train,
             is_augmented=False,
-            max_count=MAX_COUNT,
         )
         if training_args.do_train
         else None
@@ -123,20 +138,19 @@ if __name__ == "__main__":
             # max_seq_length=data_args.max_seq_length,
             mode=Split.train,
             is_augmented=True,
-            max_count=MAX_COUNT,
+            # max_count=MAX_COUNT,
         )
         if training_args.do_train
         else None
     )
 
-    # # split train:dev = 8:2
-    # train_size = int(0.8 * len(train_unsup_dataset))
-    # eval_size = len(train_unsup_dataset) - train_size
+    # dev dataset - split train_sup : dev = 8 : 2
+    # train_size = int(0.8 * len(train_sup_dataset))  # sup data -> 25000 ?
+    # dev_size = len(train_sup_dataset) - train_size
     
-    # TODO eval dataset
-    # train_dataset, eval_dataset = torch.utils.data.random_split(
-    #     train_unsup_dataset, 
-    #     [train_size, eval_size], 
+    # train_sup_dataset, dev_dataset = torch.utils.data.random_split(
+    #     train_sup_dataset, 
+    #     [train_size, dev_size], 
     #     generator=torch.Generator().manual_seed(training_args.seed)
     # )
 
@@ -145,15 +159,15 @@ if __name__ == "__main__":
             data_dir=training_args.data_dir,
             # tokenizer=tokenizer,
             # max_seq_length=data_args.max_seq_length,
-            mode=Split.test,  # temp
+            mode=Split.test,
             is_augmented=False,
-            max_count=MAX_COUNT,
+            # max_count=MAX_COUNT,
         )
         if training_args.do_eval
         else None
     )
     
-    trainer = Trainer(training_args)
+    trainer = Trainer(training_args, config)
     
     # train
     if training_args.do_train:
