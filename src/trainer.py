@@ -33,6 +33,8 @@ OPTIMIZER_NAME = "optimizer.pt"
 SCHEDULER_NAME = "scheduler.pt"
 WEIGHTS_NAME = "pytorch_model.bin"
 CONFIG_NAME = "config.json"
+TOKENIZER_NAME = "tokenizer.json"
+TOKENIZER_CONFIG_NAME = "tokenizer_config.json"
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -67,16 +69,19 @@ def get_tsa_threshold(t_step, total_step, num_label, mode='linear'):
         alpha = 1 - math.exp(-t_step/total_step * 5)
     elif mode == 'exp':
         alpha = math.exp((t_step/total_step - 1) * 5)
+    else:
+        raise 'No tsa model match!'
 
     return alpha * (1 - 1/num_label) + 1/num_label
 
 
 class Trainer:
-    def __init__(self, args, config):
+    def __init__(self, args, config, tokenizer):
         self.args = args
         self.config = config
+        self.tokenizer = tokenizer
 
-    def train(self, train_sup_dataset, train_unsup_dataset, dev_dataset, model):
+    def train(self, train_sup_dataset, train_unsup_dataset, eval_dataset, model):
         best_score = -1  # TODO
 
         model.to(self.args.device)
@@ -127,6 +132,12 @@ class Trainer:
         logger.info("  Gradient accumulation steps = %d", self.args.gradient_accumulation_steps)
         logger.info("  Total optimization steps = %d", total_step)
 
+        train_results = {
+            'train_loss': list(),
+            'eval_loss': list(),
+            'accuracy': list(),
+        }
+        
         global_step = 0
         train_loss = 0.0
         logging_loss = 0.0
@@ -200,37 +211,39 @@ class Trainer:
             train_loss += loss.item()
             logging_loss += loss.item()
             
-            if global_step % self.args.gradient_accumulation_steps == 0 or global_step == total_step:
+            if global_step % self.args.gradient_accumulation_steps == 0 or global_step >= total_step:
                 # torch.nn.utils.clip_grad_norm_(model.parameters(), self.args.max_grad_norm)
                 optimizer.step()
                 scheduler.step()
                 optimizer.zero_grad()
             
             # evaluate during training
-            if global_step % self.args.eval_steps == 0:
-                cur_acc = self.evaluate(dev_dataset, model)
+            if global_step % self.args.eval_steps == 0 or global_step >= total_step:
+                eval_results = self.evaluate(eval_dataset, model)
+                
+                # logging
+                train_results['train_loss'].append(logging_loss/self.args.eval_steps)
+                logging_loss = 0.0  # TODO logging step
+                train_results['eval_loss'].append(eval_results['eval_loss'])
+                train_results['accuracy'].append(eval_results['accuracy'])
                 
                 model.eval()
 
-                if cur_acc['accuracy'] > best_score:
-                    best_score = cur_acc['accuracy']
-                    # save model
-                    self.save(global_step, model, optimizer, scheduler)
+            #     if eval_results['accuracy'] > best_score:
+            #         best_score = eval_results['accuracy']
+            #         # save model (evaluate during training only for dev set)
+                self.save(model, optimizer, scheduler, global_step)
+                self.save(model, optimizer, scheduler)
                 
-                model.train()
-            
-            # end training
-            if total_step <= global_step:
-                logger.info(f"  Average Loss {(train_loss/(t+1)):.2f}")
-                
-                cur_acc = self.evaluate(dev_dataset, model)
-                # save model
-                self.save(global_step, model, optimizer, scheduler)
+                model.train()         
 
-                return
+            if global_step >= total_step:
+                return train_results
 
     def evaluate(self, eval_dataset, model):
         results = {}
+        
+        model.to(self.args.device)
         
         # change to evaluation mode
         model.eval()
@@ -243,15 +256,8 @@ class Trainer:
         eval_sampler = RandomSampler(eval_dataset)
         eval_dataloader = DataLoader(eval_dataset, sampler=eval_sampler, batch_size=eval_batch_size)
         
-        logger.info("***** Running Evaluation *****")
-        logger.info("  Num examples = %d", len(eval_dataset))
-        logger.info("  Instantaneous batch size per GPU = %d", self.args.per_device_eval_batch_size)
-        logger.info(
-            "  Total train batch size (w. parallel, distributed & accumulation) = %d",
-            eval_batch_size
-        )
-
         eval_loss = 0.0
+        eval_steps = 0
 
         # fix seed for reproducability
         set_seed(self.args)
@@ -259,34 +265,55 @@ class Trainer:
         metric_name = "accuracy"
         metric = load_metric(metric_name)
 
-        for batch in eval_dataloader:
-            batch_tensor = [b.to(self.args.device) for b in batch[0]]  # batch[0]: orig
-            inputs = {'input_ids': batch_tensor[0], 'attention_mask': batch_tensor[1], 'token_type_ids': batch_tensor[2]}  # 'labels': batch[3] for cross entropy
-            outputs = model(**inputs)  # only yield logits
-            predictions = outputs.logits.argmax(dim=-1).detach().cpu()
+        for batch in tqdm(eval_dataloader, desc='Evaluation'):
 
-            # calculate metrics
-            metric.add_batch(predictions=predictions, references=batch[-1])
+            with torch.no_grad():
+                batch_tensor = [b.to(self.args.device) for b in batch[0]]  # batch[0]: orig
+                
+                inputs = {'input_ids': batch_tensor[0], 'attention_mask': batch_tensor[1], 'token_type_ids': batch_tensor[2], 'labels': batch[-1].to(self.args.device)}
+                outputs = model(**inputs)  # only yield logits
+                predictions = outputs.logits.argmax(dim=-1).detach().cpu()
 
+                # calculate metrics
+                metric.add_batch(predictions=predictions, references=batch[-1])
+                
+                eval_loss += outputs.loss.mean().item()
+
+            eval_steps += 1
+
+        eval_loss = eval_loss / eval_steps
+        results['eval_loss'] = eval_loss
         results.update(metric.compute())
-        logger.info(f"  {metric_name.title()} : {results[metric_name]:.2f}")
+
+        logger.info(f"  eval_loss : {eval_loss:.2f}")
+        logger.info(f"  eval_{metric_name} : {results[metric_name]:.2f}")
         
         return results
 
     def predict(self, test_dataset):
         pass
 
-    def save(self, global_step, model, optimizer, scheduler):
+    def save(self, model, optimizer, scheduler, global_step=None):
         """
         save model
         ex. output/checkpoint-{global_step}.pt
         """
-        save_dir = path.join(self.args.output_dir, f'checkpoint-{str(global_step)}')
-        if not path.isdir(save_dir):
-            makedirs(save_dir)
+        if global_step is not None:
+            save_dir = path.join(self.args.output_dir, f'checkpoint-{str(global_step)}')
+        else:
+            save_dir = self.args.output_dir
 
+        try:
+            if not path.exists(save_dir):
+                makedirs(save_dir)
+        except OSError:
+            print ('[Error] fail to create directory: ' +  save_dir)
+
+        # from pretrained model
+        self.config.save_pretrained(save_dir)
+        self.tokenizer.save_pretrained(save_dir)
+        # from trained model
         torch.save(self.args, path.join(save_dir, TRAINING_ARGS_NAME))
         torch.save(model.state_dict(), path.join(save_dir, WEIGHTS_NAME))
-        torch.save(self.config, path.join(save_dir, CONFIG_NAME))
         torch.save(scheduler.state_dict(), path.join(save_dir, SCHEDULER_NAME))
         torch.save(optimizer.state_dict(), path.join(save_dir, OPTIMIZER_NAME))

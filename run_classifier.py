@@ -19,7 +19,6 @@ from argparse import ArgumentParser
 from transformers import (
     AutoConfig,
     AutoModelForSequenceClassification,
-    AutoModel,
     AutoTokenizer,
     EvalPrediction,
     HfArgumentParser,
@@ -31,6 +30,7 @@ from enum import Enum
 
 from utils.data_loader import IMDBDataset
 from src.trainer import Trainer
+from utils.plot_util import draw_plot
 
 import pdb
 
@@ -122,8 +122,6 @@ if __name__ == "__main__":
     train_sup_dataset = (
         IMDBDataset(
             data_dir=training_args.data_dir,
-            # tokenizer=tokenizer,
-            # max_seq_length=data_args.max_seq_length,
             mode=Split.train,
             is_augmented=False,
         )
@@ -134,8 +132,6 @@ if __name__ == "__main__":
     train_unsup_dataset = (
         IMDBDataset(
             data_dir=training_args.data_dir,
-            # tokenizer=tokenizer,
-            # max_seq_length=data_args.max_seq_length,
             mode=Split.train,
             is_augmented=True,
             # max_count=MAX_COUNT,
@@ -157,8 +153,6 @@ if __name__ == "__main__":
     test_dataset = (
         IMDBDataset(
             data_dir=training_args.data_dir,
-            # tokenizer=tokenizer,
-            # max_seq_length=data_args.max_seq_length,
             mode=Split.test,
             is_augmented=False,
             # max_count=MAX_COUNT,
@@ -167,12 +161,14 @@ if __name__ == "__main__":
         else None
     )
     
-    trainer = Trainer(training_args, config)
+    trainer = Trainer(training_args, config, tokenizer)
     
     # train
     if training_args.do_train:
-        trainer.train(train_sup_dataset, train_unsup_dataset, test_dataset, model)
+        train_results = trainer.train(train_sup_dataset, train_unsup_dataset, test_dataset, model)
+        draw_plot(train_results, training_args.output_dir, ['train_loss', 'eval_loss'])
+        draw_plot(train_results, training_args.output_dir, ['accuracy'])
     
     # evaluate
     if training_args.do_eval:
-        trainer.evaluate(test_dataset, model)
+        results = trainer.evaluate(test_dataset, model)
